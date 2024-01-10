@@ -1,0 +1,10 @@
+[package]
+name = "wfcache-package-decode"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.79"
+encoding = "0.2.33"
+zstd = { version = "0.13.0", features = ["experimental"] }
+zstd-safe = { version = "7.0.0", features = ["experimental"] }
