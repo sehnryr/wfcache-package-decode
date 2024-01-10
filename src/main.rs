@@ -4,6 +4,7 @@ use std::result::Result::Ok;
 use anyhow::{Error, Result};
 use encoding::all::ISO_8859_1;
 use encoding::{DecoderTrap, Encoding};
+use replace_with::replace_with_or_abort;
 use zstd::{stream::raw::DParameter, Decoder};
 use zstd_safe::FrameFormat;
 
@@ -16,18 +17,23 @@ fn main() -> Result<()> {
     let file = std::fs::File::open(path).unwrap();
     let package = package::Package::from(file);
 
-    let mut compressed_cursor = Cursor::new(package.zstd_raw_data);
+    // let mut compressed_cursor = Cursor::new(package.zstd_raw_data.clone());
 
     let mut decompressed_zstd_file = std::fs::File::create("decompressed_zstd.bin").unwrap();
 
+    let mut package_decoder = PackageDecoder::new(
+        Cursor::new(package.zstd_raw_data),
+        package.zstd_dictionary.clone(),
+    )?;
+
     loop {
         // Break if the cursor is at the end of the compressed data.
-        if compressed_cursor.position() >= compressed_cursor.get_ref().len() as u64 {
+        if package_decoder.get_ref().position() >= package_decoder.get_ref().get_ref().len() as u64
+        {
             break;
         }
 
-        let decompressed_frame =
-            decompress_frame(&mut compressed_cursor, &package.zstd_dictionary)?;
+        let decompressed_frame = decompress_frame(&mut package_decoder)?;
         let value = ISO_8859_1
             .decode(&decompressed_frame, DecoderTrap::Strict)
             .unwrap();
@@ -35,6 +41,45 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+struct PackageDecoder<'a, R: BufRead + Seek> {
+    dictionnary: Vec<u8>,
+    decoder: Decoder<'a, R>,
+}
+
+impl<R: BufRead + Seek> PackageDecoder<'_, R> {
+    pub fn new(reader: R, dictionnary: Vec<u8>) -> Result<Self> {
+        let mut decoder = Decoder::with_dictionary(reader, &dictionnary)?;
+        decoder.set_parameter(DParameter::Format(FrameFormat::Magicless))?;
+        Ok(Self {
+            dictionnary,
+            decoder,
+        })
+    }
+
+    pub fn rebuild(&mut self) -> Result<()> {
+        replace_with_or_abort(&mut self.decoder, |decoder| {
+            let reader = decoder.finish();
+            Decoder::with_dictionary(reader, &self.dictionnary).unwrap()
+        });
+        self.decoder
+            .set_parameter(DParameter::Format(FrameFormat::Magicless))?;
+        Ok(())
+    }
+
+    pub fn get_mut(&mut self) -> &mut R {
+        self.decoder.get_mut()
+    }
+
+    pub fn get_ref(&self) -> &R {
+        self.decoder.get_ref()
+    }
+
+    pub fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {
+        self.decoder.read_exact(buf)?;
+        Ok(())
+    }
 }
 
 /// Checks the frame header of a ZSTD frame.
@@ -122,32 +167,46 @@ fn decompressed_zstd_frame_size<R: BufRead>(mut reader: R) -> Result<usize> {
 }
 
 /// Decompresses a single ZSTD frame.
-fn decompress_zstd_frame<R: BufRead + Seek>(mut reader: R, dictionnary: &[u8]) -> Result<Vec<u8>> {
-    let decompressed_size = decompressed_zstd_frame_size(&mut reader)?;
+fn decompress_zstd_frame<R: BufRead + Seek>(decoder: &mut PackageDecoder<R>) -> Result<Vec<u8>> {
+    let initial_position = decoder.get_mut().seek(std::io::SeekFrom::Current(0))?;
+    let decompressed_size = decompressed_zstd_frame_size(decoder.get_mut())?;
 
     // Check the frame header.
-    check_frame_header(&mut reader, decompressed_size)?;
-
-    let mut decoder = Decoder::with_dictionary(reader, dictionnary)?;
-    let _ = decoder.set_parameter(DParameter::Format(FrameFormat::Magicless));
-    let mut decoder = decoder.single_frame();
+    match check_frame_header(decoder.get_mut(), decompressed_size) {
+        Ok(_) => {}
+        Err(_) => {
+            decoder
+                .get_mut()
+                .seek(std::io::SeekFrom::Start(initial_position))?; // Rewind the reader.
+            return Err(Error::msg("Invalid frame header"));
+        }
+    }
 
     let mut decompressed: Vec<u8> = Vec::new();
     decompressed.resize(decompressed_size, 0);
-    decoder.read_exact(decompressed.as_mut())?;
+    match decoder.read_exact(decompressed.as_mut()) {
+        Ok(_) => {}
+        Err(_) => {
+            decoder.rebuild()?;
+            decoder
+                .get_mut()
+                .seek(std::io::SeekFrom::Start(initial_position))?; // Rewind the reader.
+            return Err(Error::msg("Invalid frame"));
+        }
+    }
 
     Ok(decompressed)
 }
 
-fn decompress_frame<R: BufRead + Seek>(mut reader: R, dictionnary: &[u8]) -> Result<Vec<u8>> {
+fn decompress_frame<R: BufRead + Seek>(decoder: &mut PackageDecoder<R>) -> Result<Vec<u8>> {
     // Try to decompress the frame as a ZSTD frame.
-    match decompress_zstd_frame(&mut reader, dictionnary) {
+    match decompress_zstd_frame(decoder) {
         Ok(decompressed) => return Ok(decompressed),
         Err(_) => {}
     }
 
     // Try to decompress the frame as a plain frame.
-    match read_plain(&mut reader) {
+    match read_plain(decoder.get_mut()) {
         Ok(decompressed) => return Ok(decompressed),
         Err(_) => {}
     }

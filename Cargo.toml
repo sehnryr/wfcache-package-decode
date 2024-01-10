@@ -6,5 +6,6 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.79"
 encoding = "0.2.33"
+replace_with = "0.1.7"
 zstd = { version = "0.13.0", features = ["experimental"] }
 zstd-safe = { version = "7.0.0", features = ["experimental"] }
