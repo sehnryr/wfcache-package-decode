@@ -26,7 +26,7 @@ fn main() -> Result<()> {
     let mut buffer2_offset: usize = 0;
     for _ in 0..package.bottom_paths_number {
         // Get the flag that indicates if the data is present in the ZSTD buffer.
-        let is_data_present = read_bit(&package.data1_raw, buffer1_offset) == 1;
+        let is_data_present = package.data1_raw.read_bit(buffer1_offset) == 1;
         buffer1_offset += 1;
 
         // If the data is not present, then continue to the next iteration.
@@ -35,7 +35,7 @@ fn main() -> Result<()> {
         }
 
         // Get the flag that indicates if the data is compressed.
-        let is_compressed = read_bit(&package.data1_raw, buffer1_offset) == 1;
+        let is_compressed = package.data1_raw.read_bit(buffer1_offset) == 1;
         buffer1_offset += 1;
 
         // Get the size of the compressed frame.
@@ -59,9 +59,19 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn read_bit(buffer: &[u8], offset: usize) -> u8 {
-    let index = offset >> 3;
-    buffer[index] >> (offset & 7) & 1
+/// Trait for reading a single bit from a buffer.
+///
+/// The buffer is expected to be a slice of bytes.
+trait ReadBit {
+    /// Reads a single bit from the buffer at the specified offset and returns it.
+    fn read_bit(&self, offset: usize) -> u8;
+}
+
+impl ReadBit for [u8] {
+    fn read_bit(&self, offset: usize) -> u8 {
+        let index = offset >> 3;
+        self[index] >> (offset & 7) & 1
+    }
 }
 
 /// Trait for reading a variable-length integer from a reader.
