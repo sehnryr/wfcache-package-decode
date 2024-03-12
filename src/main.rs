@@ -27,6 +27,8 @@ fn main() -> Result<()> {
     )?;
 
     let mut buffer1_offset: u32 = 0;
+    let mut buffer2_offset: usize = 0;
+    let mut zstd_buffer_offset: usize = 0;
     for _ in 0..package.bottom_paths_number {
         // Get the flag that indicates if the data is present in the ZSTD buffer.
         let is_data_present = read_bit(&package.data1_raw, buffer1_offset) == 1;
@@ -41,6 +43,12 @@ fn main() -> Result<()> {
         let is_compressed = read_bit(&package.data1_raw, buffer1_offset) == 1;
         buffer1_offset += 1;
 
+        // Get the size of the compressed frame.
+        let (compressed_size, size_size) =
+            read_varuint(&package.data2_raw[4..], buffer2_offset as usize);
+        buffer2_offset += size_size;
+        // TODO: Use the compressed size to read the frame from the ZSTD buffer.
+
         // Decompress or read the frame.
         let data = match is_compressed {
             true => decompress_zstd_frame(&mut package_decoder)?,
@@ -52,6 +60,9 @@ fn main() -> Result<()> {
 
         // Write the data to the file.
         decompressed_zstd_file.write_all(value.as_bytes())?;
+
+        // Update the offsets.
+        zstd_buffer_offset += compressed_size as usize;
     }
 
     Ok(())
@@ -60,6 +71,22 @@ fn main() -> Result<()> {
 fn read_bit(buffer: &[u8], offset: u32) -> u8 {
     let index = (offset >> 3) as usize;
     buffer[index] >> (offset & 7) & 1
+}
+
+fn read_varuint(buffer: &[u8], offset: usize) -> (u32, usize) {
+    let mut value: u32 = 0;
+    let mut shift: u32 = 0;
+    let mut size: usize = 0;
+    loop {
+        let byte = buffer[offset + size] as u32;
+        value |= (byte & 0b0111_1111) << shift;
+        shift += 7;
+        size += 1;
+        if byte & 0b1000_0000 == 0 {
+            break;
+        }
+    }
+    (value, size)
 }
 
 struct PackageDecoder<'a, R: BufRead + Seek> {
