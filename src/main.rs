@@ -39,9 +39,9 @@ fn main() -> Result<()> {
         buffer1_offset += 1;
 
         // Get the size of the compressed frame.
-        let (compressed_size, size_size) = read_varuint(&package.data2_raw[4..], buffer2_offset);
-        let compressed_size = compressed_size as usize;
-        buffer2_offset += size_size;
+        let mut compressed_size_buffer = &package.data2_raw[4 + buffer2_offset..];
+        let compressed_size = compressed_size_buffer.read_var_usize()?;
+        buffer2_offset = package.data2_raw.len() - 4 - compressed_size_buffer.len();
 
         // Decompress or read the frame.
         let data = match is_compressed {
@@ -64,20 +64,37 @@ fn read_bit(buffer: &[u8], offset: usize) -> u8 {
     buffer[index] >> (offset & 7) & 1
 }
 
-fn read_varuint(buffer: &[u8], offset: usize) -> (u32, usize) {
-    let mut value: u32 = 0;
-    let mut shift: u32 = 0;
-    let mut size: usize = 0;
-    loop {
-        let byte = buffer[offset + size] as u32;
-        value |= (byte & 0b0111_1111) << shift;
-        shift += 7;
-        size += 1;
-        if byte & 0b1000_0000 == 0 {
-            break;
-        }
+/// Trait for reading a variable-length integer from a reader.
+///
+/// The integer is encoded as a variable-length integer, where each byte
+/// contains 7 bits of the integer, and the MSB indicates whether the
+/// next byte is part of the integer.
+trait ReadVarInteger {
+    /// Reads a variable-length unsigned 32-bit integer from the reader.
+    fn read_var_u32(&mut self) -> Result<u32>;
+
+    /// Reads a variable-length unsigned size from the reader.
+    fn read_var_usize(&mut self) -> Result<usize> {
+        self.read_var_u32().map(|value| value as usize)
     }
-    (value, size)
+}
+
+impl<R: BufRead> ReadVarInteger for R {
+    fn read_var_u32(&mut self) -> Result<u32> {
+        let mut value: u32 = 0;
+        let mut shift: u32 = 0;
+        loop {
+            let mut buf = [0u8; 1];
+            self.read_exact(&mut buf)?;
+            let byte = buf[0] as u32;
+            value |= (byte & 0b0111_1111) << shift;
+            shift += 7;
+            if byte & 0b1000_0000 == 0 {
+                break;
+            }
+        }
+        Ok(value)
+    }
 }
 
 struct PackageDecoder<'a, R: BufRead + Seek> {
@@ -91,30 +108,9 @@ impl<R: BufRead + Seek> PackageDecoder<'_, R> {
         Ok(Self { decoder })
     }
 
-    /// Reads the size of the decompressed frame from the compressed frame.
-    ///
-    /// The size is encoded as a variable-length integer, where each byte
-    /// contains 7 bits of the size, and the MSB indicates whether the
-    /// next byte is part of the size.
-    fn read_zstd_frame_size(&mut self) -> Result<usize> {
-        let mut value: usize = 0;
-        let mut shift: usize = 0;
-        loop {
-            let mut buf = [0u8; 1];
-            self.decoder.get_mut().read_exact(&mut buf)?;
-            let byte = buf[0] as usize;
-            value |= (byte & 0b0111_1111) << shift;
-            shift += 7;
-            if byte & 0b1000_0000 == 0 {
-                break;
-            }
-        }
-        Ok(value)
-    }
-
     /// Decompresses a single ZSTD frame.
     pub fn decompress_zstd_frame(&mut self) -> Result<Vec<u8>> {
-        let decompressed_size = self.read_zstd_frame_size()?;
+        let decompressed_size = self.decoder.get_mut().read_var_usize()?;
 
         let mut decompressed: Vec<u8> = Vec::new();
         decompressed.resize(decompressed_size, 0);
