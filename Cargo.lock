@@ -104,18 +104,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26072860ba924cbfa98ea39c8c19b4dd6a4a25423dbdf219c1eca91aa0cf6964"
 
 [[package]]
-name = "replace_with"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3a8614ee435691de62bcffcf4a66d91b3594bf1428a5722e79103249a095690"
-
-[[package]]
 name = "wfcache-package-decode"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "encoding",
- "replace_with",
  "zstd",
  "zstd-safe",
 ]
