@@ -26,7 +26,7 @@ fn main() -> Result<()> {
         package.zstd_dictionary.clone(),
     )?;
 
-    let mut buffer1_offset: u32 = 0;
+    let mut buffer1_offset: usize = 0;
     let mut buffer2_offset: usize = 0;
     let mut zstd_buffer_offset: usize = 0;
     for _ in 0..package.bottom_paths_number {
@@ -68,8 +68,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn read_bit(buffer: &[u8], offset: u32) -> u8 {
-    let index = (offset >> 3) as usize;
+fn read_bit(buffer: &[u8], offset: usize) -> u8 {
+    let index = offset >> 3;
     buffer[index] >> (offset & 7) & 1
 }
 
