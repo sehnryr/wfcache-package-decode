@@ -45,8 +45,8 @@ fn main() -> Result<()> {
 
         // Decompress or read the frame.
         let data = match is_compressed {
-            true => decompress_zstd_frame(&mut package_decoder)?,
-            false => read_plain(package_decoder.get_mut(), compressed_size)?,
+            true => package_decoder.decompress_zstd_frame()?,
+            false => package_decoder.read_raw(compressed_size)?,
         };
 
         // Decode the data as ISO-8859-1.
@@ -91,54 +91,49 @@ impl<R: BufRead + Seek> PackageDecoder<'_, R> {
         Ok(Self { decoder })
     }
 
-    pub fn get_mut(&mut self) -> &mut R {
-        self.decoder.get_mut()
-    }
-
-    pub fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {
-        self.decoder.read_exact(buf)?;
-        Ok(())
-    }
-}
-
-/// Reads the size of the decompressed frame from the compressed frame.
-///
-/// The size is encoded as a variable-length integer, where each byte
-/// contains 7 bits of the size, and the MSB indicates whether the
-/// next byte is part of the size.
-fn read_zstd_frame_size<R: BufRead>(mut reader: R) -> Result<usize> {
-    let mut value: usize = 0;
-    let mut shift: usize = 0;
-    loop {
-        let mut buf = [0u8; 1];
-        reader.read_exact(&mut buf)?;
-        let byte = buf[0] as usize;
-        value |= (byte & 0b0111_1111) << shift;
-        shift += 7;
-        if byte & 0b1000_0000 == 0 {
-            break;
+    /// Reads the size of the decompressed frame from the compressed frame.
+    ///
+    /// The size is encoded as a variable-length integer, where each byte
+    /// contains 7 bits of the size, and the MSB indicates whether the
+    /// next byte is part of the size.
+    fn read_zstd_frame_size(&mut self) -> Result<usize> {
+        let mut value: usize = 0;
+        let mut shift: usize = 0;
+        loop {
+            let mut buf = [0u8; 1];
+            self.decoder.get_mut().read_exact(&mut buf)?;
+            let byte = buf[0] as usize;
+            value |= (byte & 0b0111_1111) << shift;
+            shift += 7;
+            if byte & 0b1000_0000 == 0 {
+                break;
+            }
         }
+        Ok(value)
     }
-    Ok(value)
-}
 
-/// Decompresses a single ZSTD frame.
-fn decompress_zstd_frame<R: BufRead + Seek>(decoder: &mut PackageDecoder<R>) -> Result<Vec<u8>> {
-    let decompressed_size = read_zstd_frame_size(decoder.get_mut())?;
+    /// Decompresses a single ZSTD frame.
+    pub fn decompress_zstd_frame(&mut self) -> Result<Vec<u8>> {
+        let decompressed_size = self.read_zstd_frame_size()?;
 
-    let mut decompressed: Vec<u8> = Vec::new();
-    decompressed.resize(decompressed_size, 0);
-    decoder.read_exact(decompressed.as_mut())?;
+        let mut decompressed: Vec<u8> = Vec::new();
+        decompressed.resize(decompressed_size, 0);
+        self.decoder.read_exact(decompressed.as_mut())?;
 
-    Ok(decompressed)
-}
+        Ok(decompressed)
+    }
 
-fn read_plain<R: BufRead>(mut reader: R, size: usize) -> Result<Vec<u8>> {
-    let mut buf = vec![0u8; size];
-    reader.read_exact(buf.as_mut())?;
+    /// Reads the raw data from the ZSTD buffer.
+    pub fn read_raw(&mut self, size: usize) -> Result<Vec<u8>> {
+        let mut buf = vec![0u8; size];
+        self.decoder.get_mut().read_exact(buf.as_mut())?;
 
-    // Remove the last two bytes.
-    // They are always 0x0A 0x00 and signify the end of the frame.
-    buf.truncate(size - 2);
-    Ok(buf)
+        // Remove the last two bytes from the frame.
+        // They are always 0x0A 0x00 and signify the end of the frame.
+        if size > 2 && buf[size - 2] == 0x0A && buf[size - 1] == 0x00 {
+            buf.truncate(size - 2);
+        }
+
+        Ok(buf)
+    }
 }
