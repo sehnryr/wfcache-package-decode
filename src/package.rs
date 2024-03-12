@@ -13,6 +13,7 @@ pub struct Package {
     pub data2_raw: Vec<u8>,
     pub zstd_dictionary: Vec<u8>,
     pub zstd_raw_data: Vec<u8>,
+    pub bottom_paths_number: u32,
     pub bottom_paths_raw: Vec<u8>,
 }
 
@@ -61,9 +62,9 @@ impl From<&[u8]> for Package {
         let zstd_raw_data = zstd_raw[0x100000..].to_vec();
         offset += zstd_block_length as usize;
 
-        let bottom_path_number = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+        let bottom_paths_number = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
         offset += 4;
-        let bottom_paths_raw = bytes[offset..offset + bottom_path_number as usize].to_vec();
+        let bottom_paths_raw = bytes[offset..].to_vec();
 
         Self {
             hash,
@@ -76,6 +77,7 @@ impl From<&[u8]> for Package {
             data2_raw,
             zstd_dictionary,
             zstd_raw_data,
+            bottom_paths_number,
             bottom_paths_raw,
         }
     }
