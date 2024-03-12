@@ -26,21 +26,40 @@ fn main() -> Result<()> {
         package.zstd_dictionary.clone(),
     )?;
 
-    loop {
-        // Break if the cursor is at the end of the compressed data.
-        if package_decoder.get_ref().position() >= package_decoder.get_ref().get_ref().len() as u64
-        {
-            break;
+    let mut buffer1_offset: u32 = 0;
+    for _ in 0..package.bottom_paths_number {
+        // Get the flag that indicates if the data is present in the ZSTD buffer.
+        let is_data_present = read_bit(&package.data1_raw, buffer1_offset) == 1;
+        buffer1_offset += 1;
+
+        // If the data is not present, then continue to the next iteration.
+        if !is_data_present {
+            continue;
         }
 
-        let decompressed_frame = decompress_frame(&mut package_decoder)?;
-        let value = ISO_8859_1
-            .decode(&decompressed_frame, DecoderTrap::Strict)
-            .unwrap();
+        // Get the flag that indicates if the data is compressed.
+        let is_compressed = read_bit(&package.data1_raw, buffer1_offset) == 1;
+        buffer1_offset += 1;
+
+        // Decompress or read the frame.
+        let data = match is_compressed {
+            true => decompress_zstd_frame(&mut package_decoder)?,
+            false => read_plain(package_decoder.get_mut())?,
+        };
+
+        // Decode the data as ISO-8859-1.
+        let value = ISO_8859_1.decode(&data, DecoderTrap::Strict).unwrap();
+
+        // Write the data to the file.
         decompressed_zstd_file.write_all(value.as_bytes())?;
     }
 
     Ok(())
+}
+
+fn read_bit(buffer: &[u8], offset: u32) -> u8 {
+    let index = (offset >> 3) as usize;
+    buffer[index] >> (offset & 7) & 1
 }
 
 struct PackageDecoder<'a, R: BufRead + Seek> {
@@ -196,22 +215,6 @@ fn decompress_zstd_frame<R: BufRead + Seek>(decoder: &mut PackageDecoder<R>) -> 
     }
 
     Ok(decompressed)
-}
-
-fn decompress_frame<R: BufRead + Seek>(decoder: &mut PackageDecoder<R>) -> Result<Vec<u8>> {
-    // Try to decompress the frame as a ZSTD frame.
-    match decompress_zstd_frame(decoder) {
-        Ok(decompressed) => return Ok(decompressed),
-        Err(_) => {}
-    }
-
-    // Try to decompress the frame as a plain frame.
-    match read_plain(decoder.get_mut()) {
-        Ok(decompressed) => return Ok(decompressed),
-        Err(_) => {}
-    }
-
-    Err(Error::msg("Invalid frame"))
 }
 
 fn read_plain<R: BufRead>(mut reader: R) -> Result<Vec<u8>> {
